@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'home.dart';
-import 'login_screen.dart';
-import 'firebase_options.dart'; // ✅ ملف الخيارات لكل منصة
+import 'app_config/firebase_options.dart'; // ✅ ملف الخيارات لكل منصة
+import 'features/auth/login_screen.dart';
+import 'features/home/home_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

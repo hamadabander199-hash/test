@@ -6,421 +6,312 @@ import Security
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
-  var flutterController: FlutterViewController?
-
   override func application(
   _ application: UIApplication,
   didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
 
-    self.window = UIWindow(frame: UIScreen.main.bounds)
-    let controller = FlutterViewController()
-    self.flutterController = controller
-    self.window?.rootViewController = controller
-    self.window?.makeKeyAndVisible()
-
     GeneratedPluginRegistrant.register(with: self)
 
-    // بيتحكم في منع screenshot/screen recording وقت فتح شاشة الخزنة -
-    // نفس منطق FLAG_SECURE بتاع الأندرويد بالظبط (MainActivity.kt)، هنا
-    // بنستخدم UIScreen.capturedDidChangeNotification + secure overlay
-    // لأن iOS معندوش FLAG_SECURE مباشر ومفيش API يمنع screenshot فعليًا،
-    // لكن ده بيمنع الـ screen recording (isCaptured) اللي هو الأهم.
-    let securityChannel = FlutterMethodChannel(
-      name: "camzone/security",
-      binaryMessenger: controller.binaryMessenger
-    )
+    if let controller = window?.rootViewController as? FlutterViewController {
+      let cryptoChannel = FlutterMethodChannel(name: "my_crypto_native",
+        binaryMessenger: controller.binaryMessenger)
 
-    securityChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
-      switch call.method {
-      case "enableSecureFlag":
-        DispatchQueue.main.async {
-          self?.enableSecureWindow()
-        }
-        result(true)
+      cryptoChannel.setMethodCallHandler { [weak self] call, result in
+        guard let self = self else { return }
 
-      case "disableSecureFlag":
-        DispatchQueue.main.async {
-          self?.disableSecureWindow()
-        }
-        result(true)
-
-      default:
-        result(FlutterMethodNotImplemented)
-      }
-    }
-
-    let cryptoChannel = FlutterMethodChannel(
-      name: "camzone/encryption",
-      binaryMessenger: controller.binaryMessenger
-    )
-
-    cryptoChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
-
-      guard let self = self else { return }
-
-      switch call.method {
-
-      case "encryptFileNative":
-
-        if let args = call.arguments as? [String: Any],
-        let input = args["inputPath"] as? String,
-        let output = args["outputPath"] as? String,
-        let pubKey = args["publicKeyPath"] as? String {
-
-          print("🔹 INPUT PATH:", input)
-          print("🔹 OUTPUT PATH:", output)
-          print("🔹 PUBLIC KEY PATH:", pubKey)
-
-          DispatchQueue.global(qos: .userInitiated).async {
-
+        switch call.method {
+        case "encryptFile":
+          if let args = call.arguments as? [String: Any],
+          let input = args["inputPath"] as? String,
+          let output = args["outputPath"] as? String,
+          let pubKey = args["publicKeyPath"] as? String {
             do {
-
-              try self.encryptFile(
-                inputPath: input,
-                outputPath: output,
-                publicKeyPath: pubKey
-              )
-
-              print("✅ Encryption success")
-
-              DispatchQueue.main.async {
-                result(true)
-              }
-
+              try self.encryptFile(inputPath: input, outputPath: output, publicKeyPath: pubKey)
+              result(true)
             } catch {
-
-              print("❌ Encryption error:", error.localizedDescription)
-
-              DispatchQueue.main.async {
-                result(
-                  FlutterError(
-                    code: "ENCRYPTION_ERROR",
-                    message: "Encryption failed",
-                    details: error.localizedDescription
-                  )
-                )
-              }
+              result(false)
             }
+          } else {
+            result(false)
           }
 
-        } else {
-
-          result(
-            FlutterError(
-              code: "INVALID_ARGS",
-              message: "Invalid arguments passed",
-              details: nil
-            )
-          )
-        }
-
-      // --- Streaming / real-time video encryption (زي MainActivity.kt بالظبط) ---
-
-      case "startStreamEncryption":
-
-        if let args = call.arguments as? [String: Any],
-        let output = args["outputPath"] as? String,
-        let pubKey = args["publicKeyPath"] as? String {
-
-          DispatchQueue.global(qos: .userInitiated).async {
-            let handle = CryptoNative.startStreamEncryption(withOutputPath: output, publicKeyPath: pubKey)
-            DispatchQueue.main.async {
-              if handle == 0 {
-                result(FlutterError(code: "STREAM_START_FAILED", message: "Native stream init failed", details: nil))
-              } else {
-                result(handle)
-              }
+        case "decryptFile":
+          if let args = call.arguments as? [String: Any],
+          let input = args["inputPath"] as? String,
+          let output = args["outputPath"] as? String,
+          let privKey = args["privateKeyPath"] as? String {
+            do {
+              try self.decryptFile(inputPath: input, outputPath: output, privateKeyPath: privKey)
+              result(true)
+            } catch {
+              result(false)
             }
+          } else {
+            result(false)
           }
 
-        } else {
-          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing stream-start arguments", details: nil))
+        default:
+          result(FlutterMethodNotImplemented)
         }
-
-      case "feedStreamEncryption":
-
-        if let args = call.arguments as? [String: Any],
-        let handleNum = args["handle"] as? NSNumber,
-        let dataArg = args["data"] as? FlutterStandardTypedData {
-
-          let handle = handleNum.int64Value
-          let bytes = dataArg.data
-
-          DispatchQueue.global(qos: .userInitiated).async {
-            let ok = CryptoNative.feedStreamEncryption(withHandle: handle, data: bytes)
-            DispatchQueue.main.async {
-              result(ok)
-            }
-          }
-
-        } else {
-          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing stream-feed arguments", details: nil))
-        }
-
-      case "finishStreamEncryption":
-
-        if let args = call.arguments as? [String: Any],
-        let handleNum = args["handle"] as? NSNumber {
-
-          let handle = handleNum.int64Value
-
-          DispatchQueue.global(qos: .userInitiated).async {
-            let ok = CryptoNative.finishStreamEncryption(withHandle: handle)
-            DispatchQueue.main.async {
-              result(ok)
-            }
-          }
-
-        } else {
-          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing handle", details: nil))
-        }
-
-      case "abortStreamEncryption":
-
-        if let args = call.arguments as? [String: Any],
-        let handleNum = args["handle"] as? NSNumber {
-
-          let handle = handleNum.int64Value
-          DispatchQueue.global(qos: .userInitiated).async {
-            CryptoNative.abortStreamEncryption(withHandle: handle)
-            DispatchQueue.main.async {
-              result(nil)
-            }
-          }
-
-        } else {
-          result(nil)
-        }
-
-      // --- فحص السلامة بعد التسجيل (structural check بس، زي الأندرويد) ---
-
-      case "verifyEncryptedVideo":
-
-        if let args = call.arguments as? [String: Any],
-        let path = args["path"] as? String {
-
-          DispatchQueue.global(qos: .userInitiated).async {
-            let valid = CryptoNative.verifyEncryptedFile(atPath: path)
-            DispatchQueue.main.async {
-              result(valid)
-            }
-          }
-
-        } else {
-          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing path", details: nil))
-        }
-
-      // --- فك التشفير (الجهاز عنده مفتاح RSA الخاص) ---
-
-      case "decryptFileToBytes":
-
-        if let args = call.arguments as? [String: Any],
-        let input = args["inputPath"] as? String,
-        let privateKeyPem = args["privateKeyPem"] as? String {
-
-          DispatchQueue.global(qos: .userInitiated).async {
-            let plaintext = CryptoNative.decryptFileToBytes(atPath: input, privateKeyPem: privateKeyPem)
-            DispatchQueue.main.async {
-              if let plaintext = plaintext {
-                result(FlutterStandardTypedData(bytes: plaintext))
-              } else {
-                result(
-                  FlutterError(
-                    code: "DECRYPT_FAILED",
-                    message: "Decryption failed - file may be corrupted, tampered, or the wrong private key was used",
-                    details: nil
-                  )
-                )
-              }
-            }
-          }
-
-        } else {
-          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing decryption arguments", details: nil))
-        }
-
-      default:
-        result(FlutterMethodNotImplemented)
       }
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  // MARK: - Secure window (منع screen recording وقت فتح الخزنة)
-  // نفس فكرة FLAG_SECURE بتاع الأندرويد، بس iOS مفيهوش API يمنع
-  // screenshot مباشرة. اللي بيتعمل هنا: أي وقت الشاشة بقت "مسجَّلة"
-  // (isCaptured == true عن طريق screen recording أو AirPlay/mirroring)
-  // إحنا بنغطي الشاشة بطبقة سودا فورًا لحد ما التسجيل يقف.
-  private var secureOverlay: UIView?
-  private var secureObserver: NSObjectProtocol?
-  private var secureFlagEnabled = false
-
-  func enableSecureWindow() {
-    secureFlagEnabled = true
-    updateSecureOverlay()
-
-    if secureObserver == nil {
-      secureObserver = NotificationCenter.default.addObserver(
-        forName: UIScreen.capturedDidChangeNotification,
-        object: nil,
-        queue: .main
-      ) { [weak self] _ in
-        self?.updateSecureOverlay()
-      }
-    }
-  }
-
-  func disableSecureWindow() {
-    secureFlagEnabled = false
-    if let observer = secureObserver {
-      NotificationCenter.default.removeObserver(observer)
-      secureObserver = nil
-    }
-    secureOverlay?.removeFromSuperview()
-    secureOverlay = nil
-  }
-
-  private func updateSecureOverlay() {
-    guard secureFlagEnabled, let window = self.window else { return }
-
-    if UIScreen.main.isCaptured {
-      if secureOverlay == nil {
-        let overlay = UIView(frame: window.bounds)
-        overlay.backgroundColor = .black
-        overlay.tag = 998877
-        window.addSubview(overlay)
-        secureOverlay = overlay
-      }
-    } else {
-      secureOverlay?.removeFromSuperview()
-      secureOverlay = nil
-    }
-  }
-
-  // MARK: - Load RSA Public Key
-  func loadPublicKey(from path: String) throws -> SecKey {
-
-    let keyString = try String(contentsOfFile: path)
-
-    let cleanedKey = keyString
-    .replacingOccurrences(of: "-----BEGIN PUBLIC KEY-----", with: "")
-    .replacingOccurrences(of: "-----END PUBLIC KEY-----", with: "")
-    .replacingOccurrences(of: "\r", with: "")
-    .replacingOccurrences(of: "\n", with: "")
-
-    guard let keyData = Data(base64Encoded: cleanedKey) else {
-      throw NSError(
-        domain: "Encryption",
-        code: 10,
-        userInfo: [NSLocalizedDescriptionKey: "Invalid Base64 in public key"]
-      )
-    }
-
-    let attributes: [String: Any] = [
-      kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-      kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
-      kSecAttrKeySizeInBits as String: 2048
-    ]
-
-    guard let key = SecKeyCreateWithData(
-      keyData as CFData,
-      attributes as CFDictionary,
-      nil
-    ) else {
-      throw NSError(
-        domain: "Encryption",
-        code: 11,
-        userInfo: [NSLocalizedDescriptionKey: "SecKeyCreateWithData failed"]
-      )
-    }
-
-    return key
-  }
-
-  // MARK: - Encryption function
-  func encryptFile(
-  inputPath: String,
-  outputPath: String,
-  publicKeyPath: String
-  ) throws {
-
+  // MARK: - Encrypt File (whole file at once)
+  func encryptFile(inputPath: String, outputPath: String, publicKeyPath: String) throws {
     let fileManager = FileManager.default
 
     guard fileManager.fileExists(atPath: inputPath) else {
       throw NSError(domain: "EncryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Input file not found"])
     }
-
     guard fileManager.fileExists(atPath: publicKeyPath) else {
       throw NSError(domain: "EncryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Public key file not found"])
     }
 
     let inputFile = URL(fileURLWithPath: inputPath)
     let outputFile = URL(fileURLWithPath: outputPath)
+    let pubKeyData = try Data(contentsOf: URL(fileURLWithPath: publicKeyPath))
+    let pubKey = try loadPublicKey(fromPEM: pubKeyData)
 
     let fileData = try Data(contentsOf: inputFile)
-
-    // تحميل المفتاح
-    let pubKey = try loadPublicKey(from: publicKeyPath)
-
-    // إنشاء AES key
     let aesKey = SymmetricKey(size: .bits256)
-
-    // IV
     let iv = AES.GCM.Nonce()
 
-    // تحويل AES key لبيانات
+    // Encrypt AES key with RSA
     let aesKeyData = aesKey.withUnsafeBytes { Data($0) }
-
-    // تشفير AES key بـ RSA
     var error: Unmanaged<CFError>?
-
-    guard let encAESKey = SecKeyCreateEncryptedData(
-      pubKey,
-      .rsaEncryptionOAEPSHA256,
-      aesKeyData as CFData,
-      &error
-    ) else {
-
-      throw NSError(
-        domain: "EncryptError",
-        code: -1,
-        userInfo: [NSLocalizedDescriptionKey: error?.takeRetainedValue().localizedDescription ?? "RSA encryption failed"]
-      )
+    guard let encAESKey = SecKeyCreateEncryptedData(pubKey, .rsaEncryptionOAEPSHA256, aesKeyData as CFData, &error) else {
+      throw NSError(domain: "EncryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: error?.takeRetainedValue().localizedDescription ?? "RSA encryption failed"])
     }
 
-    let encryptedAESKey = encAESKey as Data
+    let keyBytes = encAESKey as Data
+    let keyLen = UInt16(keyBytes.count)
+    let keyLenData = Data([UInt8(keyLen >> 8), UInt8(keyLen & 0xFF)])
 
-    // تشفير الملف بـ AES
+    // AES-GCM encryption
     let sealedBox = try AES.GCM.seal(fileData, using: aesKey, nonce: iv)
 
-    // كتابة الملف
-    let writer = OutputStream(url: outputFile, append: false)!
+    // Write to output file
+    guard let writer = OutputStream(url: outputFile, append: false) else {
+      throw NSError(domain: "EncryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot open output stream"])
+    }
     writer.open()
     defer { writer.close() }
 
+    func writeChunk(_ bytes: [UInt8]) throws {
+      var offset = 0
+      while offset < bytes.count {
+        let written = bytes[offset...].withUnsafeBufferPointer { ptr -> Int in
+          writer.write(ptr.baseAddress!, maxLength: bytes.count - offset)
+        }
+        if written <= 0 {
+          throw NSError(domain: "EncryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Write failed: \(writer.streamError?.localizedDescription ?? "unknown")"])
+        }
+        offset += written
+      }
+    }
+
     // Header
-    writer.write([UInt8]("ENCv1".utf8), maxLength: 5)
-
-    // طول المفتاح
-    let keyLen = UInt16(encryptedAESKey.count)
-    let keyLenData = Data([UInt8(keyLen >> 8), UInt8(keyLen & 0xFF)])
-    writer.write([UInt8](keyLenData), maxLength: 2)
-
-    // AES key encrypted
-    writer.write([UInt8](encryptedAESKey), maxLength: encryptedAESKey.count)
-
+    try writeChunk([UInt8]("ENCv1".utf8))
+    // AES key length
+    try writeChunk([UInt8](keyLenData))
+    // Encrypted AES key
+    try writeChunk([UInt8](keyBytes))
     // IV
     let ivData = iv.withUnsafeBytes { Data($0) }
-    writer.write([UInt8](ivData), maxLength: ivData.count)
-
+    try writeChunk([UInt8](ivData))
     // Ciphertext
-    writer.write([UInt8](sealedBox.ciphertext), maxLength: sealedBox.ciphertext.count)
-
+    try writeChunk([UInt8](sealedBox.ciphertext))
     // Tag
-    writer.write([UInt8](sealedBox.tag), maxLength: sealedBox.tag.count)
+    try writeChunk([UInt8](sealedBox.tag))
+  }
 
-    print("✅ Encryption finished")
+  // MARK: - Decrypt File
+  func decryptFile(inputPath: String, outputPath: String, privateKeyPath: String) throws {
+    let fileManager = FileManager.default
+
+    guard fileManager.fileExists(atPath: inputPath) else {
+      throw NSError(domain: "DecryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Encrypted file not found"])
+    }
+    guard fileManager.fileExists(atPath: privateKeyPath) else {
+      throw NSError(domain: "DecryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Private key file not found"])
+    }
+
+    let inputFile = URL(fileURLWithPath: inputPath)
+    let privKeyData = try Data(contentsOf: URL(fileURLWithPath: privateKeyPath))
+    let privKey = try loadPrivateKey(fromPEM: privKeyData)
+
+    let fileData = try Data(contentsOf: inputFile)
+    guard fileData.count >= 5 + 2 + 12 + 16 else {
+      throw NSError(domain: "DecryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "File too small / corrupted"])
+    }
+    var cursor = 0
+
+    // 1️⃣ Header
+    let header = String(data: fileData[cursor..<cursor+5], encoding: .utf8)!
+    guard header == "ENCv1" else { throw NSError(domain: "DecryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid file header"]) }
+    cursor += 5
+
+    // 2️⃣ Encrypted AES key length
+    let encKeyLen = UInt16(fileData[cursor]) << 8 | UInt16(fileData[cursor+1])
+    cursor += 2
+
+    // 3️⃣ Encrypted AES key
+    let encAESKeyData = fileData[cursor..<cursor+Int(encKeyLen)]
+    cursor += Int(encKeyLen)
+
+    // 4️⃣ IV
+    let ivData = fileData[cursor..<cursor+12]
+    cursor += 12
+    let iv = try AES.GCM.Nonce(data: ivData)
+
+    // 5️⃣ Decrypt AES key
+    var error: Unmanaged<CFError>?
+    guard let aesKeyData = SecKeyCreateDecryptedData(privKey, .rsaEncryptionOAEPSHA256, encAESKeyData as CFData, &error) as Data? else {
+      throw NSError(domain: "DecryptError", code: -1, userInfo: [NSLocalizedDescriptionKey: error?.takeRetainedValue().localizedDescription ?? "RSA decryption failed"])
+    }
+    let aesKey = SymmetricKey(data: aesKeyData)
+
+    // 6️⃣ Ciphertext + Tag
+    let ciphertext = fileData[cursor..<fileData.count-16]
+    let tag = fileData[fileData.count-16..<fileData.count]
+    let sealedBox = try AES.GCM.SealedBox(nonce: iv, ciphertext: ciphertext, tag: tag)
+
+    // Decrypt
+    let decrypted = try AES.GCM.open(sealedBox, using: aesKey)
+    try decrypted.write(to: URL(fileURLWithPath: outputPath))
+  }
+
+  // MARK: - Load Keys
+
+  func loadPublicKey(fromPEM pemData: Data) throws -> SecKey {
+    guard let pemString = String(data: pemData, encoding: .utf8) else {
+      throw NSError(domain: "KeyError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid PEM data"])
+    }
+
+    let base64String = pemString
+    .replacingOccurrences(of: "-----BEGIN PUBLIC KEY-----", with: "")
+    .replacingOccurrences(of: "-----END PUBLIC KEY-----", with: "")
+    .replacingOccurrences(of: "\n", with: "")
+    .replacingOccurrences(of: "\r", with: "")
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard let derData = Data(base64Encoded: base64String) else {
+      throw NSError(domain: "KeyError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode base64"])
+    }
+
+    // مش بنحدد kSecAttrKeySizeInBits — بنسيب iOS يستنتجها من البيانات
+    // نفسها بدل ما نخمّن 2048 وممكن يكون المفتاح 3072/4096.
+    let options: [String: Any] = [
+      kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+      kSecAttrKeyClass as String: kSecAttrKeyClassPublic
+    ]
+    var createError: Unmanaged<CFError>?
+    guard let secKey = SecKeyCreateWithData(derData as CFData, options as CFDictionary, &createError) else {
+      let msg = createError?.takeRetainedValue().localizedDescription ?? "Cannot load public key"
+      throw NSError(domain: "KeyError", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
+    }
+    return secKey
+  }
+
+  // MARK: - كشف وفك غلاف PKCS#8 (لو موجود) للوصول لمفتاح RSA الخام (PKCS#1)
+  //
+  // PKCS#1 (RSA PRIVATE KEY):  SEQUENCE { version INTEGER, n INTEGER, e INTEGER, ... }
+  // PKCS#8 (PRIVATE KEY):      SEQUENCE { version INTEGER, AlgorithmIdentifier SEQUENCE, OCTET STRING { <PKCS#1 هنا> } }
+  //
+  // الفرق: بعد الـ version INTEGER، لو جه SEQUENCE تانية معناها PKCS#8،
+  // ولو جه INTEGER تانية (وهو الـ modulus) معناها PKCS#1 أصلاً.
+  private func stripPKCS8WrapperIfNeeded(_ der: Data) -> Data {
+
+    func readLength(_ data: Data, _ index: inout Int) -> Int? {
+      guard index < data.count else { return nil }
+      let first = data[index]
+      index += 1
+      if first & 0x80 == 0 {
+        return Int(first)
+      }
+      let numBytes = Int(first & 0x7F)
+      guard numBytes > 0, numBytes <= 4, index + numBytes <= data.count else { return nil }
+      var length = 0
+      for _ in 0..<numBytes {
+        length = (length << 8) | Int(data[index])
+        index += 1
+      }
+      return length
+    }
+
+    var index = 0
+    // لازم يبدأ بـ SEQUENCE (0x30)
+    guard der.count > 4, der[index] == 0x30 else { return der }
+    index += 1
+    guard readLength(der, &index) != nil else { return der }
+
+    // الـ version INTEGER
+    guard index < der.count, der[index] == 0x02 else { return der }
+    index += 1
+    guard let versionLen = readLength(der, &index), index + versionLen <= der.count else { return der }
+    index += versionLen
+
+    guard index < der.count else { return der }
+    let nextTag = der[index]
+
+    if nextTag == 0x02 {
+      // ده PKCS#1 أصلاً (modulus INTEGER مباشرة) — ملوش داعي لأي فك
+      return der
+    }
+
+    if nextTag == 0x30 {
+      // ده PKCS#8 — نتخطى الـ AlgorithmIdentifier SEQUENCE بالكامل
+      index += 1
+      guard let algLen = readLength(der, &index), index + algLen <= der.count else { return der }
+      index += algLen
+
+      // اللي بعده لازم يكون OCTET STRING (0x04) وجواه الـ PKCS#1 الحقيقي
+      guard index < der.count, der[index] == 0x04 else { return der }
+      index += 1
+      guard let octetLen = readLength(der, &index), index + octetLen <= der.count else { return der }
+
+      return der.subdata(in: index..<(index + octetLen))
+    }
+
+    // شكل غير متوقع — رجّع البيانات زي ما هي وسيب SecKeyCreateWithData يحاول
+    // (وممكن يفشل بـ error واضح بدل ما نفترض حاجة غلط)
+    return der
+  }
+
+  func loadPrivateKey(fromPEM pemData: Data) throws -> SecKey {
+    guard var pemString = String(data: pemData, encoding: .utf8) else {
+      throw NSError(domain: "KeyError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid PEM data"])
+    }
+
+    let headers = ["-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----",
+                   "-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"]
+    for header in headers { pemString = pemString.replacingOccurrences(of: header, with: "") }
+    pemString = pemString.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard let keyData = Data(base64Encoded: pemString) else {
+      throw NSError(domain: "KeyError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode base64"])
+    }
+
+    // 🔑 الإصلاح الأساسي: بنكتشف ونفك غلاف PKCS#8 تلقائيًا لو المفتاح
+    // مكتوب بصيغة "-----BEGIN PRIVATE KEY-----" (بدل ما نفترض PKCS#1 دايمًا).
+    let pkcs1Data = stripPKCS8WrapperIfNeeded(keyData)
+
+    // 🔑 إصلاح تاني: مش بنخمّن حجم المفتاح (2048/1024)، بنسيب iOS
+    // يستنتجه من البيانات نفسها — بيشتغل صح مع أي حجم مفتاح.
+    let options: [String: Any] = [
+      kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+      kSecAttrKeyClass as String: kSecAttrKeyClassPrivate
+    ]
+
+    var createError: Unmanaged<CFError>?
+    guard let secKey = SecKeyCreateWithData(pkcs1Data as CFData, options as CFDictionary, &createError) else {
+      let msg = createError?.takeRetainedValue().localizedDescription ?? "Cannot load private key"
+      throw NSError(domain: "KeyError", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
+    }
+    return secKey
   }
 }

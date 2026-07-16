@@ -76,6 +76,13 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
       });
 
       _showSnack("تم حفظ المفتاح الخاص بنجاح ✅");
+    } on FormatException catch (e) {
+      // ده بيرمى لو الملف فيه BEGIN/END مش متطابقين أو الجسم فاضي بعد
+      // التطبيع - يعني الملف مش PEM صالح فعلًا (مش مجرد مسافات زيادة،
+      // لأن دي بتتصلح تلقائيًا جوه normalizePem).
+      if (!mounted) return;
+      setState(() => _isBusy = false);
+      _showSnack(e.message, isError: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _isBusy = false);

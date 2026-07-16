@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:sqflite_sqlcipher/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -31,9 +33,46 @@ class VaultDatabaseService {
     }
 
     final docsDir = await getApplicationDocumentsDirectory();
+
+    // تأكيد إن الفولدر نفسه موجود فعلًا قبل محاولة فتح/إنشاء الملف جواه —
+    // بعض الأجهزة/الحالات النادرة بترجع مسار الـ docs من غير ما تضمن إنه
+    // اتعمله create فعليًا، وده كان بيسبب DatabaseException(open_failed).
+    if (!await docsDir.exists()) {
+      await docsDir.create(recursive: true);
+    }
+
     final dbPath = p.join(docsDir.path, _dbFileName);
 
-    _db = await openDatabase(
+    try {
+      _db = await _openCipherDb(dbPath, passphrase);
+    } catch (e) {
+      // لو فتح قاعدة البيانات فشل (open_failed) - يعني الملف الموجود
+      // تالف/معطوب بشكل مايتفتحش خالص، أو مش متوافق مع الإصدار الحالي.
+      // بدل ما نسيب المستخدم عالق على طول برسالة open_failed، بنمسح
+      // الملف التالف ونجرب ننشئ واحد جديد نظيف.
+      //
+      // ملحوظة: ده معناه فقدان بيانات الخزنة القديمة، لكن لو الملف كان
+      // فعلًا مش قابل للفتح فهو مش قابل للاسترجاع أصلًا في الحالة دي.
+      final badFile = File(dbPath);
+      if (await badFile.exists()) {
+        try {
+          await badFile.delete();
+        } catch (_) {
+          // لو فشل المسح نفسه (نادر جدًا)، نسيب الاستثناء الأصلي يتفرقع
+          // بدل ما نخبي المشكلة.
+          rethrow;
+        }
+      }
+
+      _db = await _openCipherDb(dbPath, passphrase);
+    }
+
+    return _db!;
+  }
+
+  static Future<Database> _openCipherDb(
+      String dbPath, String passphrase) async {
+    return openDatabase(
       dbPath,
       password: passphrase,
       version: 1,
@@ -52,8 +91,6 @@ class VaultDatabaseService {
             'CREATE INDEX idx_vault_date ON $table (date_created DESC)');
       },
     );
-
-    return _db!;
   }
 
   /// بتقفل الاتصال بقاعدة البيانات — تتنادى وقت قفل الخزنة (لوك/خروج من
@@ -93,7 +130,7 @@ class VaultDatabaseService {
   static Future<int> count() async {
     final db = await _open();
     final result =
-        await db.rawQuery('SELECT COUNT(*) as c FROM $table');
+    await db.rawQuery('SELECT COUNT(*) as c FROM $table');
     return Sqflite.firstIntValue(result) ?? 0;
   }
 }

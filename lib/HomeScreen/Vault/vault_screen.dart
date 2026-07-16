@@ -1,5 +1,7 @@
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:intl/intl.dart';
 
 import '../../Services/VaultAuthGate.dart';
@@ -47,6 +49,47 @@ class _VaultGalleryContentState extends State<_VaultGalleryContent> {
   bool _importing = false;
   String? _loadError;
 
+  // ---------------------------------------------------------------------
+  // Toast + debug helpers
+  // ---------------------------------------------------------------------
+
+  void _debug(String msg) {
+    debugPrint('[VaultScreen][DEBUG] $msg');
+  }
+
+  void _toastSuccess(String msg) {
+    _debug('SUCCESS: $msg');
+    Fluttertoast.showToast(
+      msg: msg,
+      toastLength: Toast.LENGTH_SHORT,
+      gravity: ToastGravity.BOTTOM,
+      backgroundColor: Colors.green,
+      textColor: Colors.white,
+    );
+  }
+
+  void _toastError(String msg) {
+    _debug('ERROR: $msg');
+    Fluttertoast.showToast(
+      msg: msg,
+      toastLength: Toast.LENGTH_LONG,
+      gravity: ToastGravity.BOTTOM,
+      backgroundColor: Colors.redAccent,
+      textColor: Colors.white,
+    );
+  }
+
+  void _toastWarning(String msg) {
+    _debug('WARNING: $msg');
+    Fluttertoast.showToast(
+      msg: msg,
+      toastLength: Toast.LENGTH_SHORT,
+      gravity: ToastGravity.BOTTOM,
+      backgroundColor: Colors.orange,
+      textColor: Colors.white,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +115,7 @@ class _VaultGalleryContentState extends State<_VaultGalleryContent> {
   }
 
   Future<void> _loadInitial() async {
+    _debug('بدء تحميل الصفحة الأولى من الخزنة');
     setState(() {
       _initialLoading = true;
       _loadError = null;
@@ -87,16 +131,20 @@ class _VaultGalleryContentState extends State<_VaultGalleryContent> {
         _hasMore = page.length == _pageSize;
         _initialLoading = false;
       });
-    } catch (e) {
+      _debug('اتحمّل ${page.length} عنصر في الصفحة الأولى');
+    } catch (e, st) {
+      _debug('فشل تحميل الصفحة الأولى: $e\n$st');
       if (!mounted) return;
       setState(() {
         _initialLoading = false;
         _loadError = '$e';
       });
+      _toastError('تعذّر تحميل محتوى الخزنة');
     }
   }
 
   Future<void> _loadMore() async {
+    _debug('بدء تحميل صفحة إضافية، offset = ${_items.length}');
     setState(() => _loadingMore = true);
     try {
       final page = await VaultDatabaseService.fetchPage(
@@ -109,42 +157,78 @@ class _VaultGalleryContentState extends State<_VaultGalleryContent> {
         _hasMore = page.length == _pageSize;
         _loadingMore = false;
       });
-    } catch (_) {
+      _debug('اتحمّل ${page.length} عنصر إضافي');
+    } catch (e, st) {
+      _debug('فشل تحميل صفحة إضافية: $e\n$st');
       if (!mounted) return;
       setState(() => _loadingMore = false);
+      _toastWarning('تعذّر تحميل المزيد من العناصر');
     }
   }
 
+  /// دي بتشتغل من ساعة ما المستخدم يدوس زرار "+" في الـ AppBar.
   Future<void> _importFile() async {
+    _debug('المستخدم دوس على زرار استيراد ملف .enc');
+
     try {
+      _debug('بفتح الـ file picker...');
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['enc'],
       );
-      if (result == null || result.files.single.path == null) return;
+
+      if (result == null) {
+        // المستخدم لغى الاختيار فعلًا.
+        _debug('المستخدم لغى اختيار الملف');
+        return;
+      }
+
+      _debug('المستخدم اختار: ${result.files.single.name}');
+
+      if (result.files.single.path == null) {
+        // ده مش إلغاء من المستخدم - بيحصل غالبًا في أندرويد لما الملف
+        // بييجي من مزوّد مستندات (Google Drive، بعض تطبيقات الملفات)
+        // وبيرجّع content:// URI مش مسار حقيقي على القرص، فـ file_picker
+        // بيرجّع path == null.
+        _debug('path == null: الملف جاي من مزوّد مستندات (content:// URI)');
+        _toastError(
+          'تعذّر الوصول لمسار الملف مباشرة. جرّب تختار الملف من '
+              'تطبيق "الملفات" بدل مزوّدات التخزين السحابي، أو انسخ '
+              'الملف لتخزين الجهاز المحلي الأول.',
+        );
+        return;
+      }
+
+      final pickedPath = result.files.single.path!;
+      _debug('مسار الملف المختار: $pickedPath');
 
       setState(() => _importing = true);
-      final item =
-      await VaultImportService.importEncFile(result.files.single.path!);
-      if (!mounted) return;
+      _debug('بدء عملية الاستيراد الفعلية عن طريق VaultImportService...');
 
+      final item = await VaultImportService.importEncFile(pickedPath);
+      _debug('نجحت عملية الاستيراد، id الملف الجديد = ${item.id}, نوعه = ${item.type}');
+
+      if (!mounted) return;
       setState(() {
         _items.insert(0, item);
         _importing = false;
       });
-    } catch (e) {
+
+      _toastSuccess(
+        item.type == VaultItemType.photo
+            ? 'اتضافت الصورة للخزنة بنجاح'
+            : 'اتضاف الفيديو للخزنة بنجاح',
+      );
+    } catch (e, st) {
+      _debug('فشلت عملية الاستيراد: $e\n$st');
       if (!mounted) return;
       setState(() => _importing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('تعذّر استيراد الملف: $e'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      _toastError('تعذّر استيراد الملف: $e');
     }
   }
 
   void _openItem(VaultItem item) {
+    _debug('فتح عنصر: id = ${item.id}, نوعه = ${item.type}');
     if (item.type == VaultItemType.video) {
       Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => VaultVideoPlayerScreen(videoItem: item),

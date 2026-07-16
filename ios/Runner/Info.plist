@@ -23,6 +23,30 @@
     <key>NSFaceIDUsageDescription</key>
     <string>هذا التطبيق يستخدم Face ID لحماية الوصول إلى الخزنة الآمنة</string>
 
+    <!-- iOS معندوش فكرة عن امتداد .enc افتراضيًا (مش نوع ملف معروف)،
+         فمن غير التسجيل ده الفايل بيكر بيعرض ملفات الـ .enc "رمادي"
+         (مش قابلة للاختيار) حتى لو كانت موجودة فعليًا على الجهاز. -->
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.bander.camzone.enc</string>
+            <key>UTTypeDescription</key>
+            <string>Camzone Encrypted File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>enc</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -20,6 +20,9 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>هذا التطبيق يحتاج الوصول للميكروفون لتسجيل الصوت</string>
 
+    <key>NSFaceIDUsageDescription</key>
+    <string>هذا التطبيق يستخدم Face ID لحماية الوصول إلى الخزنة الآمنة</string>
+
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

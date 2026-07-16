@@ -42,6 +42,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// بالظبط - مش بيفك التشفير لأن الجهاز مالوش المفتاح الخاص.
 + (BOOL)verifyEncryptedFileAtPath:(NSString *)path;
 
+/// بيفك تشفير ملف ENCv1 كامل (صورة أو فيديو صغير) في الذاكرة بالكامل
+/// ويرجع الـ plaintext bytes مباشرة - من غير ما يكتب أي حاجة على القرص.
+/// بيتحقق من الـ GCM authentication tag؛ بيرجع nil لو الملف تالف/متلاعب
+/// فيه أو المفتاح الخاص غلط. نفس منطق decryptFileToBytesNative بتاع
+/// الأندرويد بالظبط.
++ (nullable NSData *)decryptFileToBytesAtPath:(NSString *)inputPath
+                                privateKeyPem:(NSString *)privateKeyPem;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -21,6 +21,35 @@ import Security
 
     GeneratedPluginRegistrant.register(with: self)
 
+    // بيتحكم في منع screenshot/screen recording وقت فتح شاشة الخزنة -
+    // نفس منطق FLAG_SECURE بتاع الأندرويد بالظبط (MainActivity.kt)، هنا
+    // بنستخدم UIScreen.capturedDidChangeNotification + secure overlay
+    // لأن iOS معندوش FLAG_SECURE مباشر ومفيش API يمنع screenshot فعليًا،
+    // لكن ده بيمنع الـ screen recording (isCaptured) اللي هو الأهم.
+    let securityChannel = FlutterMethodChannel(
+      name: "camzone/security",
+      binaryMessenger: controller.binaryMessenger
+    )
+
+    securityChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      switch call.method {
+      case "enableSecureFlag":
+        DispatchQueue.main.async {
+          self?.enableSecureWindow()
+        }
+        result(true)
+
+      case "disableSecureFlag":
+        DispatchQueue.main.async {
+          self?.disableSecureWindow()
+        }
+        result(true)
+
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     let cryptoChannel = FlutterMethodChannel(
       name: "camzone/encryption",
       binaryMessenger: controller.binaryMessenger
@@ -182,12 +211,92 @@ import Security
           result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing path", details: nil))
         }
 
+      // --- فك التشفير (الجهاز عنده مفتاح RSA الخاص) ---
+
+      case "decryptFileToBytes":
+
+        if let args = call.arguments as? [String: Any],
+        let input = args["inputPath"] as? String,
+        let privateKeyPem = args["privateKeyPem"] as? String {
+
+          DispatchQueue.global(qos: .userInitiated).async {
+            let plaintext = CryptoNative.decryptFileToBytes(atPath: input, privateKeyPem: privateKeyPem)
+            DispatchQueue.main.async {
+              if let plaintext = plaintext {
+                result(FlutterStandardTypedData(bytes: plaintext))
+              } else {
+                result(
+                  FlutterError(
+                    code: "DECRYPT_FAILED",
+                    message: "Decryption failed - file may be corrupted, tampered, or the wrong private key was used",
+                    details: nil
+                  )
+                )
+              }
+            }
+          }
+
+        } else {
+          result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing decryption arguments", details: nil))
+        }
+
       default:
         result(FlutterMethodNotImplemented)
       }
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // MARK: - Secure window (منع screen recording وقت فتح الخزنة)
+  // نفس فكرة FLAG_SECURE بتاع الأندرويد، بس iOS مفيهوش API يمنع
+  // screenshot مباشرة. اللي بيتعمل هنا: أي وقت الشاشة بقت "مسجَّلة"
+  // (isCaptured == true عن طريق screen recording أو AirPlay/mirroring)
+  // إحنا بنغطي الشاشة بطبقة سودا فورًا لحد ما التسجيل يقف.
+  private var secureOverlay: UIView?
+  private var secureObserver: NSObjectProtocol?
+  private var secureFlagEnabled = false
+
+  func enableSecureWindow() {
+    secureFlagEnabled = true
+    updateSecureOverlay()
+
+    if secureObserver == nil {
+      secureObserver = NotificationCenter.default.addObserver(
+        forName: UIScreen.capturedDidChangeNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.updateSecureOverlay()
+      }
+    }
+  }
+
+  func disableSecureWindow() {
+    secureFlagEnabled = false
+    if let observer = secureObserver {
+      NotificationCenter.default.removeObserver(observer)
+      secureObserver = nil
+    }
+    secureOverlay?.removeFromSuperview()
+    secureOverlay = nil
+  }
+
+  private func updateSecureOverlay() {
+    guard secureFlagEnabled, let window = self.window else { return }
+
+    if UIScreen.main.isCaptured {
+      if secureOverlay == nil {
+        let overlay = UIView(frame: window.bounds)
+        overlay.backgroundColor = .black
+        overlay.tag = 998877
+        window.addSubview(overlay)
+        secureOverlay = overlay
+      }
+    } else {
+      secureOverlay?.removeFromSuperview()
+      secureOverlay = nil
+    }
   }
 
   // MARK: - Load RSA Public Key

@@ -24,6 +24,9 @@
 #include <openssl/rsa.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
+#include <openssl/bio.h>
+#include <openssl/crypto.h>
+#include <vector>
 
 static void logOpenSSLError(const char *msg) {
     char err_buf[256];
@@ -270,6 +273,154 @@ cleanup:
 
     is.close();
     return YES;
+}
+
+// ============================================================================
+// بورت مباشر لـ Java_com_bander_camzone_CryptoBridge_decryptFileToBytesNative
+// (native-lib.cpp) - نفس المنطق بالظبط، بما فيه التحقق من GCM tag.
+// ============================================================================
++ (nullable NSData *)decryptFileToBytesAtPath:(NSString *)inputPath
+                                privateKeyPem:(NSString *)privateKeyPem {
+
+    const char *in_path = inputPath.UTF8String;
+    const char *priv_pem = privateKeyPem.UTF8String;
+
+    NSData *result = nil;
+
+    OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
+
+    BIO *keyBio = nullptr;
+    EVP_PKEY *privKey = nullptr;
+    EVP_PKEY_CTX *rsa_ctx = nullptr;
+    EVP_CIPHER_CTX *gcm_ctx = nullptr;
+    std::ifstream is;
+    std::vector<unsigned char> encAesKey;
+    std::vector<unsigned char> ciphertext;
+    std::vector<unsigned char> plaintext;
+
+    unsigned char header[5];
+    unsigned char lenBytes[2];
+    int encKeyLen = 0;
+    unsigned char aes_key[32];
+    size_t aes_key_len = sizeof(aes_key);
+    unsigned char iv[12];
+    unsigned char tag[16];
+    std::streampos ciphertextStart;
+    std::streamoff cipherLen = 0;
+    int out_len = 0;
+    int total_len = 0;
+
+    is.open(in_path, std::ios::binary);
+    if (!is.is_open()) {
+        NSLog(@"CryptoNative decrypt: cannot open input file");
+        goto cleanup;
+    }
+
+    is.read((char *)header, 5);
+    if (is.gcount() != 5 || memcmp(header, "ENCv1", 5) != 0) {
+        NSLog(@"CryptoNative decrypt: bad or missing ENCv1 header");
+        goto cleanup;
+    }
+
+    is.read((char *)lenBytes, 2);
+    if (is.gcount() != 2) { NSLog(@"CryptoNative decrypt: truncated key-length field"); goto cleanup; }
+    encKeyLen = (lenBytes[0] << 8) | lenBytes[1];
+    if (encKeyLen <= 0 || encKeyLen > 512) {
+        NSLog(@"CryptoNative decrypt: implausible wrapped-key length %d", encKeyLen);
+        goto cleanup;
+    }
+
+    encAesKey.resize(encKeyLen);
+    is.read((char *)encAesKey.data(), encKeyLen);
+    if (is.gcount() != encKeyLen) { NSLog(@"CryptoNative decrypt: truncated wrapped key"); goto cleanup; }
+
+    is.read((char *)iv, 12);
+    if (is.gcount() != 12) { NSLog(@"CryptoNative decrypt: truncated iv"); goto cleanup; }
+
+    // قراءة المفتاح الخاص من الذاكرة (نص PEM) - مفيش أي كتابة على القرص أبدًا.
+    keyBio = BIO_new_mem_buf(priv_pem, -1);
+    if (!keyBio) { NSLog(@"CryptoNative decrypt: BIO alloc failed"); goto cleanup; }
+
+    privKey = PEM_read_bio_PrivateKey(keyBio, NULL, NULL, NULL);
+    if (!privKey) {
+        logOpenSSLError("decrypt: failed to parse private key (wrong format or corrupted)");
+        goto cleanup;
+    }
+
+    rsa_ctx = EVP_PKEY_CTX_new(privKey, NULL);
+    if (!rsa_ctx ||
+        EVP_PKEY_decrypt_init(rsa_ctx) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_padding(rsa_ctx, RSA_PKCS1_OAEP_PADDING) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_oaep_md(rsa_ctx, EVP_sha256()) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_mgf1_md(rsa_ctx, EVP_sha256()) <= 0 ||
+        EVP_PKEY_decrypt(rsa_ctx, aes_key, &aes_key_len, encAesKey.data(), encAesKey.size()) <= 0) {
+        logOpenSSLError("decrypt: RSA unwrap failed (wrong private key for this file?)");
+        goto cleanup;
+    }
+
+    if (aes_key_len != 32) {
+        NSLog(@"CryptoNative decrypt: unexpected unwrapped AES key length %zu", aes_key_len);
+        goto cleanup;
+    }
+
+    ciphertextStart = is.tellg();
+    is.seekg(0, std::ios::end);
+    cipherLen = (std::streamoff)is.tellg() - (std::streamoff)ciphertextStart - 16;
+    if (cipherLen < 0) { NSLog(@"CryptoNative decrypt: file smaller than header+tag implies"); goto cleanup; }
+    is.seekg(ciphertextStart);
+
+    ciphertext.resize(cipherLen);
+    if (cipherLen > 0) {
+        is.read((char *)ciphertext.data(), cipherLen);
+        if (is.gcount() != cipherLen) { NSLog(@"CryptoNative decrypt: truncated ciphertext"); goto cleanup; }
+    }
+
+    is.read((char *)tag, 16);
+    if (is.gcount() != 16) { NSLog(@"CryptoNative decrypt: truncated GCM tag"); goto cleanup; }
+
+    gcm_ctx = EVP_CIPHER_CTX_new();
+    if (!gcm_ctx || EVP_DecryptInit_ex(gcm_ctx, EVP_aes_256_gcm(), NULL, aes_key, iv) != 1) {
+        logOpenSSLError("decrypt: AES-GCM init failed");
+        goto cleanup;
+    }
+
+    plaintext.resize((size_t)cipherLen);
+    if (cipherLen > 0) {
+        if (!EVP_DecryptUpdate(gcm_ctx, plaintext.data(), &out_len, ciphertext.data(), (int)cipherLen)) {
+            logOpenSSLError("decrypt: AES update failed");
+            goto cleanup;
+        }
+        total_len = out_len;
+    }
+
+    if (EVP_CIPHER_CTX_ctrl(gcm_ctx, EVP_CTRL_GCM_SET_TAG, 16, tag) != 1) {
+        logOpenSSLError("decrypt: failed to set expected GCM tag");
+        goto cleanup;
+    }
+
+    {
+        unsigned char final_buf[16];
+        if (EVP_DecryptFinal_ex(gcm_ctx, final_buf, &out_len) <= 0) {
+            logOpenSSLError("decrypt: GCM authentication failed (file corrupted, tampered, or wrong key)");
+            goto cleanup;
+        }
+    }
+
+    plaintext.resize((size_t)total_len);
+
+    result = [NSData dataWithBytes:plaintext.data() length:plaintext.size()];
+
+    OPENSSL_cleanse(aes_key, sizeof(aes_key));
+
+cleanup:
+    if (gcm_ctx) EVP_CIPHER_CTX_free(gcm_ctx);
+    if (rsa_ctx) EVP_PKEY_CTX_free(rsa_ctx);
+    if (privKey) EVP_PKEY_free(privKey);
+    if (keyBio) BIO_free(keyBio);
+    if (is.is_open()) is.close();
+
+    return result;
 }
 
 @end

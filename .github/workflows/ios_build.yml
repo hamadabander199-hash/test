@@ -1,0 +1,67 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.8'
+          channel: stable
+          architecture: arm64
+
+      - name: Install dependencies
+        run: |
+          flutter clean
+          flutter pub get
+
+      # بنثبّت إصدار CocoaPods عشان الـ pod install يبقى نفس السلوك دايمًا،
+      # بدل ما يعتمد على أي إصدار موجود جاهز على الـ runner لحظة التشغيل.
+      - name: Install CocoaPods
+        run: sudo gem install cocoapods -v 1.15.2
+
+      # كاش لملفات الـ Pods بناءً على محتوى الـ Podfile.lock، عشان لو مفيش
+      # تغيير في الاعتماديات، الـ CI ميعيدش تنزيل نفس الحاجات من الصفر
+      # كل مرة (خصوصًا OpenSSL-Universal اللي حجمها مش صغير).
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Install Pods
+        run: |
+          cd ios
+          rm -rf Podfile.lock
+          pod install --repo-update
+          cd ..
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA file
+        run: |
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r app.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: build/ios/iphoneos/app.ipa

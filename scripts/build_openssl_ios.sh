@@ -39,7 +39,7 @@ build_one() {
   cd "$BUILD_DIR"
 
   export CROSS_TOP="$(xcrun --sdk $SDK --show-sdk-platform-path)/Developer"
-  export CROSS_SDK="$(xcrun --sdk $SDK --show-sdk-platform-version 2>/dev/null; xcrun --sdk $SDK --show-sdk-path | xargs basename)"
+  export CROSS_SDK="$(basename "$(xcrun --sdk $SDK --show-sdk-path)")"
   export CC="$(xcrun --sdk $SDK -f clang)"
 
   # لو معماريتين (سيميوليتور Intel+Apple Silicon) نبنيهم كل واحدة لوحدها وندمجهم بـ lipo

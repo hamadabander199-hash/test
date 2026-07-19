@@ -60,7 +60,19 @@ build_one() {
       ARCH_BUILD="$BUILD_DIR"
     fi
     cd "$ARCH_BUILD"
-    ./Configure "$TARGET" no-shared no-tests no-asm \
+
+    # OpenSSL محتاج target مختلف لكل معمارية في السيميوليتور
+    # (التارجت العام iossimulator-xcrun بيبني arm64 دايمًا مهما كانت المعمارية المطلوبة)
+    local ARCH_TARGET="$TARGET"
+    if [ "$SDK" = "iphonesimulator" ]; then
+      if [ "$ARCH" = "arm64" ]; then
+        ARCH_TARGET="iossimulator-arm64-xcrun"
+      elif [ "$ARCH" = "x86_64" ]; then
+        ARCH_TARGET="iossimulator-x86_64-xcrun"
+      fi
+    fi
+
+    ./Configure "$ARCH_TARGET" no-shared no-tests no-asm \
         $MIN_VERSION_FLAG \
         --prefix="$OUT_DIR/${NAME}_${ARCH}"
     make -j"$(sysctl -n hw.ncpu)"

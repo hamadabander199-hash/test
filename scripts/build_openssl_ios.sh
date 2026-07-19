@@ -42,6 +42,13 @@ build_one() {
   export CROSS_SDK="$(basename "$(xcrun --sdk $SDK --show-sdk-path)")"
   export CC="$(xcrun --sdk $SDK -f clang)"
 
+  # علم min-version لازم يختلف حسب المنصة عشان Xcode يقدر يميّز
+  # مكتبة السيميوليتور عن مكتبة الجهاز الحقيقي لما يجمعهم في xcframework
+  local MIN_VERSION_FLAG="-mios-version-min=$MIN_IOS_VERSION"
+  if [ "$SDK" = "iphonesimulator" ]; then
+    MIN_VERSION_FLAG="-mios-simulator-version-min=$MIN_IOS_VERSION"
+  fi
+
   # لو معماريتين (سيميوليتور Intel+Apple Silicon) نبنيهم كل واحدة لوحدها وندمجهم بـ lipo
   local LIBCRYPTO_PARTS=()
   local LIBSSL_PARTS=()
@@ -54,7 +61,7 @@ build_one() {
     fi
     cd "$ARCH_BUILD"
     ./Configure "$TARGET" no-shared no-tests no-asm \
-        -mios-version-min=$MIN_IOS_VERSION \
+        $MIN_VERSION_FLAG \
         --prefix="$OUT_DIR/${NAME}_${ARCH}"
     make -j"$(sysctl -n hw.ncpu)"
     make install_sw
@@ -76,8 +83,8 @@ build_one() {
 # 1) جهاز حقيقي iOS (arm64)
 build_one "device" "ios64-cross" "iphoneos" "arm64"
 
-# 2) السيميوليتور (arm64 على أبل سيليكون + x86_64 على انتل، لو محتاج)
-build_one "simulator" "iossimulator-xcrun" "iphonesimulator" "arm64"
+# 2) السيميوليتور (arm64 على أبل سيليكون + x86_64 على انتل)
+build_one "simulator" "iossimulator-xcrun" "iphonesimulator" "arm64 x86_64"
 
 echo "==> تجميع XCFramework"
 cd "$WORK_DIR"

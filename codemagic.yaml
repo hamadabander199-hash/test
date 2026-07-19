@@ -1,0 +1,80 @@
+definitions:
+  openssl_version: &openssl_version "3.3.1"
+
+workflows:
+  ios-openssl-build:
+    name: iOS + OpenSSL (Flutter) - بدون Mac محلي
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        OPENSSL_VERSION: *openssl_version
+
+    scripts:
+      # ------------------------------------------------------------------
+      # 1) بناء OpenSSL من المصدر لـ iOS (device + simulator) -> xcframework
+      #    نفس سكريبت build_openssl_ios.sh اللي عندك، هنا مدمج كخطوة CI
+      # ------------------------------------------------------------------
+      - name: بناء OpenSSL.xcframework
+        script: |
+          set -euo pipefail
+          chmod +x scripts/build_openssl_ios.sh
+          cd scripts
+          ./build_openssl_ios.sh "$OPENSSL_VERSION"
+          cd ..
+          mkdir -p ios/Frameworks
+          cp -r scripts/openssl-ios/OpenSSL.xcframework ios/Frameworks/
+
+      # ------------------------------------------------------------------
+      # 2) تجهيز ملفات الـ Objective-C++ / Swift داخل مجلد ios/Runner
+      #    (لو الملفات دي أصلاً موجودة في الريبو بتاعك تحت ios/Runner
+      #     ممكن تشيل الخطوة دي خالص)
+      # ------------------------------------------------------------------
+      - name: نسخ ملفات CryptoEngine
+        script: |
+          set -euo pipefail
+          cp native_ios_src/CryptoEngine.h ios/Runner/CryptoEngine.h
+          cp native_ios_src/CryptoEngine.mm ios/Runner/CryptoEngine.mm
+          cp native_ios_src/Runner-Bridging-Header.h ios/Runner/Runner-Bridging-Header.h
+          # لو AppDelegate.swift بتاعك مختلف، ادمج المحتوى يدويًا بدل النسخ المباشر
+          cp native_ios_src/AppDelegate.swift ios/Runner/AppDelegate.swift
+
+      # ------------------------------------------------------------------
+      # 3) ربط الـ xcframework وبناء settings عبر Podfile أو Xcode project
+      #    الطريقة الأسهل: إضافة xcframework عبر CocoaPods vendored_frameworks
+      #    أو التأكد إنه مضاف في Xcode project.pbxproj (لو عامل commit له).
+      # ------------------------------------------------------------------
+      - name: flutter pub get
+        script: |
+          flutter packages pub get
+
+      - name: pod install
+        script: |
+          find . -name "Podfile" -maxdepth 2 -execdir pod install \;
+
+      # ------------------------------------------------------------------
+      # 4) بناء التطبيق
+      #    - بدون Apple Developer account: هيبني للـ Simulator بس (مش IPA
+      #      قابل للتوقيع/التوزيع على جهاز حقيقي)
+      #    - مع Apple Developer account مربوط في Codemagic (Team ID + certs):
+      #      شيل خطوة الـ simulator وفعّل flutter build ipa
+      # ------------------------------------------------------------------
+      - name: "بناء للسيميوليتور (بدون توقيع - يكفي للاختبار)"
+        script: |
+          flutter build ios --simulator --no-codesign
+
+        # عشان تبني IPA حقيقي لجهاز فعلي، لازم تربط Apple Developer account
+        # في Codemagic (Settings -> Code signing identities)، وبعدين تستخدم:
+        #
+        # - name: بناء IPA موقّع لجهاز حقيقي
+        #   script: |
+        #     flutter build ipa --export-options-plist=/Users/builder/export_options.plist
+
+    artifacts:
+      - build/ios/iphonesimulator/*.app
+      - scripts/openssl-ios/OpenSSL.xcframework
+      # لو فعّلت بناء الـ IPA الموقّع:
+      # - build/ios/ipa/*.ipa
